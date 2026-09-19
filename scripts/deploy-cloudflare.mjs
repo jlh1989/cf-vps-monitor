@@ -3,7 +3,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { prepareCloudflareVerificationEnv } from './cloudflare-build-tools.mjs';
-
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const wrangler = join(root, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
 const sourceConfig = join(root, 'wrangler.toml');
@@ -19,7 +18,6 @@ const wranglerDeployArgs = deployArgs.filter(arg => arg !== '--skip-migrations')
 const deployCommand = process.env.CF_MONITOR_DEPLOY_COMMAND === 'versions-upload'
   ? ['versions', 'upload']
   : ['deploy'];
-
 // This is also the entrypoint used by the Wrangler wrapper and Workers Builds.
 // Reuse the same commit's GitHub verification in Workers Builds. Local deploys
 // still verify locally. Neither path may publish before its checks pass.
@@ -29,13 +27,13 @@ if (!isDryRun && isWorkersBuild) {
     cwd: root, env: process.env, stdio: 'inherit', windowsHide: true,
   });
   if (ci.status !== 0) fail('Deployment stopped: GitHub CI for this commit did not pass.');
-
   console.log('GitHub CI passed. Building deployment assets without repeating the test suite.');
   const build = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], {
     cwd: root, env: process.env, stdio: 'inherit', shell: process.platform === 'win32', windowsHide: true,
   });
   if (build.status !== 0) fail('Deployment stopped: build did not pass.');
-  const unchanged = spawnSync('git', ['diff', '--quiet', 'HEAD', '--'], { cwd: root, windowsHide: true });
+  // ========== 【修改这一行，增加排除目录】 ==========
+  const unchanged = spawnSync('git', ['diff', '--quiet', 'HEAD', '--', ':!frontend/dist', ':!worker/.tmp'], { cwd: root, windowsHide: true });
   if (!verifiedCommit || currentGitCommit() !== verifiedCommit || unchanged.status !== 0) {
     fail('Deployment stopped: source changed after GitHub CI verification.');
   }
@@ -54,7 +52,6 @@ if (!isDryRun && isWorkersBuild) {
   });
   if (verification.status !== 0) fail('Deployment stopped: full verification did not pass.');
 }
-
 function runWrangler(args, options = {}) {
   return spawnSync(process.execPath, [wrangler, ...args], {
     cwd: root,
@@ -62,17 +59,14 @@ function runWrangler(args, options = {}) {
     ...options,
   });
 }
-
 function currentGitCommit() {
   const result = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
   return result.status === 0 ? result.stdout.trim() : '';
 }
-
 function fail(message) {
   console.error(message);
   process.exit(1);
 }
-
 /**
  * 解析本次部署的目标 Worker 名。优先级：--name 参数 > CF_WORKER_NAME 环境变量 > wrangler.toml 的 name。
  *
@@ -92,17 +86,14 @@ function resolveWorkerName() {
   const source = readFileSync(sourceConfig, 'utf8');
   return { name: source.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1]?.trim() || '', fromEnv: false };
 }
-
 /** 目标 Worker 是否已经部署过。已存在 ⇒ 这是更新部署，线上变量已配置好。 */
 function workerAlreadyDeployed(name) {
   if (!name) return false;
   return runWrangler(['secret', 'list', '--name', name]).status === 0;
 }
-
 const { name: workerName, fromEnv: workerNameFromEnv } = resolveWorkerName();
 /** true 表示复用线上已有的 SUPABASE_URL：从生成的配置里省略它，并强制 --keep-vars。 */
 let reuseDeployedSupabaseUrl = false;
-
 function resolveSupabaseUrl({ allowDryRunFallback = false } = {}) {
   const envUrl = process.env.SUPABASE_URL?.trim();
   const source = readFileSync(sourceConfig, 'utf8');
@@ -133,7 +124,6 @@ function resolveSupabaseUrl({ allowDryRunFallback = false } = {}) {
   }
   return url.replace(/\/$/, '');
 }
-
 function writeDeployConfig() {
   const source = readFileSync(sourceConfig, 'utf8');
   const supabaseUrl = resolveSupabaseUrl({ allowDryRunFallback: isDryRun });
@@ -151,7 +141,6 @@ function writeDeployConfig() {
   mkdirSync(dirname(deployConfig), { recursive: true });
   writeFileSync(deployConfig, generated);
 }
-
 function writeDeploySecretsFile() {
   const secrets = Object.fromEntries(
     [...requiredSecrets, ...supabaseSecretNames]
@@ -159,7 +148,6 @@ function writeDeploySecretsFile() {
       .filter(([, value]) => value),
   );
   if (Object.keys(secrets).length === 0) return false;
-
   const missing = requiredSecrets.filter(name => !secrets[name]);
   if (missing.length) {
     fail(`Missing required Worker secrets in build environment: ${missing.join(', ')}`);
@@ -167,26 +155,22 @@ function writeDeploySecretsFile() {
   if (!supabaseSecretNames.some(name => secrets[name])) {
     fail('Missing required Worker secret in build environment: SUPABASE_SECRET_KEY');
   }
-
   mkdirSync(dirname(deploySecretsFile), { recursive: true });
   writeFileSync(deploySecretsFile, JSON.stringify(secrets), { mode: 0o600 });
   return true;
 }
-
 function checkSecrets() {
   // 按实际目标 Worker 查询，而不是按配置里的 name——CI 可能用 --name 覆盖了目标。
   const result = runWrangler(['secret', 'list', '--name', workerName]);
   if (result.status !== 0) {
     fail(`Could not list Worker secrets. Set them first with: npx wrangler secret put JWT_SECRET\n${result.stderr || result.stdout}`);
   }
-
   let secrets;
   try {
     secrets = JSON.parse(result.stdout);
   } catch {
     fail(`Could not parse Worker secret list.\n${result.stdout}`);
   }
-
   const names = new Set(secrets.map(secret => secret.name));
   const missing = requiredSecrets.filter(name => !names.has(name));
   if (missing.length) {
@@ -196,7 +180,6 @@ function checkSecrets() {
     fail('Missing required Worker secret: SUPABASE_SECRET_KEY\nSet it with: npx wrangler secret put SUPABASE_SECRET_KEY');
   }
 }
-
 function buildWranglerDeployArgs() {
   const args = [...deployCommand, '--config', deployConfig, ...wranglerDeployArgs];
   // 名字来自 CF_WORKER_NAME 时要显式传给 wrangler，否则它会用配置里的默认名。
@@ -206,23 +189,18 @@ function buildWranglerDeployArgs() {
   if (hasDeploySecretsFile) args.push('--secrets-file', deploySecretsFile);
   return args;
 }
-
 writeDeployConfig();
 const hasDeploySecretsFile = writeDeploySecretsFile();
-
 if (isDryRun) {
   const args = buildWranglerDeployArgs();
   const deploy = runWrangler(args, { stdio: 'inherit' });
   if (hasDeploySecretsFile) rmSync(deploySecretsFile, { force: true });
   process.exit(deploy.status ?? 1);
 }
-
 if (!keepsExistingVars && !hasDeploySecretsFile) {
   checkSecrets();
 }
-
 console.log('Deploying Worker. Initialize the database after deploy at /db-init.');
-
 const args = buildWranglerDeployArgs();
 const deploy = runWrangler(args, { stdio: 'inherit' });
 if (hasDeploySecretsFile) rmSync(deploySecretsFile, { force: true });
