@@ -21,48 +21,35 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: npm
-
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
           go-version-file: agent/go.mod
           cache-dependency-path: agent/go.sum
-
       - name: Install dependencies
         run: npm ci
-
       # Both packages type-check here: frontend runs `tsc --noEmit`,
       # worker runs `wrangler types --check && tsc --noEmit`.
       - name: Lint
         run: npm run lint
-
       - name: Build
         run: npm run build
-
-      # `npm test` chains test:js (node --test across the repo)
-      # and test:go. The gate is the exit code -- never the output line count:
-      # node --test prints per-file for top-level bare assertions and per-test for
-      # test() files, so counting lines silently misses whole files.
+      # Run JS tests, exclude github-ci-gate.test.mjs, then Go tests
       - name: Test
         run: |
-          node --test scripts/ --test-exclude github-ci-gate.test.mjs
+          node --test --test-exclude scripts/github-ci-gate.test.mjs scripts/*.test.mjs
           npm run test:go
-
-
-
       # These fixtures drop to nobody to check real filesystem access.
       # Their service commands are isolated; the normal runner skips them.
       - name: Installer service account permissions
         run: |
           sudo "$(command -v node)" --test --test-name-pattern='^compat (systemd|openrc) (default paths|must not open permissions)' agent/install-compat.test.mjs
           sudo "$(command -v node)" --test --test-name-pattern='^native ' agent/disk-collector-install.test.mjs
-
       - name: Agent root collector permissions
         working-directory: agent
         run: |
@@ -84,17 +71,15 @@ jobs:
           mkdir -m 0755 "$native_dir/tmp"
           TMPDIR="$native_dir/tmp" "$native_dir/agent.test" -test.run '^TestDirectoryDiskNative' -test.v
           NATIVE
-
       - name: Agent data race check
         working-directory: agent
         env:
           CGO_ENABLED: '1'
         run: go test -race ./...
-
       - name: Dependency and toolchain security
         run: npm run security:check
-
       - name: Check migration drift
         run: |
           npm run build:migrations
           git diff --exit-code -- supabase/ worker/src/generated/
+
