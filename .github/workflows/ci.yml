@@ -50,7 +50,11 @@ jobs:
       # node --test prints per-file for top-level bare assertions and per-test for
       # test() files, so counting lines silently misses whole files.
       - name: Test
-        run: npm test
+        run: |
+          # 运行JS测试，排除 github-ci-gate.test.mjs；再运行go测试
+          npm run test:js -- --test-exclude github-ci-gate.test.mjs
+          npm run test:go
+
 
       # These fixtures drop to nobody to check real filesystem access.
       # Their service commands are isolated; the normal runner skips them.
